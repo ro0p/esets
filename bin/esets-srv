@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -e
+
+source logger.sh
+
+AV_CONFIG_DIR="/etc/opt/eset/esets"
+ERA_AGENT=${ERA_AGENT:-}
+
+template()
+{
+    awk '{while(match($0,"[$]{{[^}}]*}")) {var=substr($0,RSTART+3,RLENGTH -4);gsub("[$]{{"var"}}",ENVIRON[var])}}1' < $1 > $2
+}
+
+log "Starting ESET Server Security..."
+
+if [ -n "${ERA_AGENT}" ]; then
+    log debug "Checking ERA Agent..."
+    if [ ! -f /opt/eset/RemoteAdministrator/Agent/ERAAgent ]; then
+	[ ! -f "${ERA_AGENT}" ] && log die "ERA agent installer is  missing!"
+	[ -z "$(file ${ERA_AGENT} | grep 'shell script')" ] && log die "Invalid ERA agent installer type!"
+	log "Installing ERA agent..."
+	# Disable autostart after installation. Ugly...
+	rcd=$(command -v update-rc.d)
+	mv "$rcd" "${rcd}.orig"
+	sh "${ERA_AGENT}" 2>/dev/null
+	mv "${rcd}.orig" "$rcd"
+	log "ERA agent installation done."
+    fi
+fi
+
+# Copy default configuration if not exists
+[ -z "$(ls -A ${AV_CONFIG_DIR})" ] && cp -R /root/default/eset/* /etc/opt/eset/
+
+[ ! -f "${AV_CONFIG_DIR}/esets.cfg" ] && log die "Configuration file 'esets.cfg' is missing! Exiting."
+[ -z "$(ls -A "${AV_CONFIG_DIR}/license" 2>/dev/null)" ] && log die "Missing license file! Exiting."
+
+export ERA_AGENT_SERVICE=""
+if [ -f /opt/eset/RemoteAdministrator/Agent/ERAAgent ]; then
+    log debug "ERA agent found. Setting up..."
+    export ERA_AGENT_SERVICE=$(cat /etc/supervisord.eraagent.conf.tpl)
+fi
+
+template /etc/supervisord.conf.tpl /etc/supervisord.conf
+
+log "Starting services..."
+exec /usr/bin/supervisord -c /etc/supervisord.conf
